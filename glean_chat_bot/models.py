@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 class ExtractedDoc(BaseModel):
     """One local file, normalized into what the indexing API wants."""
+
     doc_id: str
     title: str
     body: str
@@ -21,6 +22,7 @@ class ExtractedDoc(BaseModel):
 
 class Passage(BaseModel):
     """One retrieved chunk of one document, as returned by Search."""
+
     marker: int  # 1-based; the [n] the model is told to cite
     doc_id: str
     title: str
@@ -30,6 +32,7 @@ class Passage(BaseModel):
 
 class Source(BaseModel):
     """A citation the model emitted, after we tried to resolve it."""
+
     marker: int
     resolved: bool
     doc_id: str | None = None
@@ -39,6 +42,7 @@ class Source(BaseModel):
 
 class Answer(BaseModel):
     """The envelope the MCP tool returns."""
+
     answer: str
     sources: list[Source] = Field(default_factory=list)
     diagnostics: dict = Field(default_factory=dict)

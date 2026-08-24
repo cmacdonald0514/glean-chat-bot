@@ -11,12 +11,23 @@ poetry run glean-index --dry-run        # walk the corpus, print the extraction 
 poetry run glean-index                  # extract and bulk-push
 poetry run glean-index --process-now    # ask Glean to process immediately (rate limited, 1 per 3h)
 poetry run ruff check . && poetry run ruff format .   # before committing
+poetry run pytest                       # the contract tests: no network, no tokens
+poetry run pytest -m live               # the eval set, against the real Glean instance
 ```
 
-`-v` on `glean-index` turns on debug logging. There is no test suite — `--dry-run`
-is the only way to exercise the write path without touching Glean, and
-`docs/EVAL_QUESTIONS.md` is the manual regression set for the read path (every
-expected answer there is invented, so a correct answer proves retrieval worked).
+`-v` on `glean-index` turns on debug logging. `--dry-run` is the only way to
+exercise the write path without touching Glean.
+
+`tests/test_contract.py` holds one test per invariant this design rests on, and
+nothing else — token separation, the floor gating generation, unresolved
+citations staying visible, the MCP envelope. It runs in ~1s with no credentials,
+so keep it that way: quality belongs in the eval set, not here.
+
+`tests/eval_cases.py` is the read path's regression set. Every expected answer
+in it is invented, so a correct answer proves retrieval worked. A case carrying
+`known_gap` is xfailed with the reason: those are real gaps in retrieval today,
+not flaky tests, and `strict=False` means fixing one reports XPASS rather than
+going red.
 
 Config comes from `.env` (`cp .env.example .env`); `load_dotenv(override=False)`
 means an exported shell variable beats the file.

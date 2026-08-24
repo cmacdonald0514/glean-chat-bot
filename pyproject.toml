@@ -18,6 +18,7 @@ glean-index = "glean_chat_bot.indexing:main"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.14"
+pytest = "^8.4"
 
 [build-system]
 requires = ["poetry-core>=2.0"]
@@ -31,3 +32,12 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]
 # SIM905 would flatten the STOP_WORDS block into one 400-char list literal.
 ignore = ["SIM905"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The default run is the offline tier: no network, no tokens. `pytest -m live`
+# overrides this and runs the eval set against the real Glean instance.
+addopts = "-m 'not live'"
+markers = [
+    "live: hits the real Glean API; needs GLEAN_CLIENT_TOKEN and an indexed corpus",
+]

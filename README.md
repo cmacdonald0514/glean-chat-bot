@@ -53,6 +53,8 @@ poetry run python -m glean_chat_bot     # the MCP server, on stdio
 poetry run glean-index --dry-run        # extract and report, send nothing
 poetry run glean-index                  # extract and bulk-push
 poetry run glean-index --process-now    # ask Glean to process immediately (1 per 3h)
+poetry run pytest                       # contract tests: no network, no tokens
+poetry run pytest -m live               # the eval set, against real Glean
 ```
 
 Add `-v` for debug logging.
@@ -100,7 +102,9 @@ glean_chat_bot/
   utils/           config.py (env loading, one Settings, two constructors)
                    logging.py (log format, timing wrapper on every Glean call)
 data/              the corpus
-docs/              eval question set, extraction notes
+docs/              extraction notes
+tests/             test_contract.py (the invariants, offline)
+                   eval_cases.py + test_eval_live.py (the eval set, `-m live`)
 ```
 
 Poetry for dependencies and packaging, Ruff for lint and format. Run
@@ -110,4 +114,4 @@ Poetry for dependencies and packaging, Ruff for lint and format. Run
 
 Group and user permissions, department filtering, freshness annotations, a
 content-hash manifest, query rewriting and adaptive retry, streaming,
-conversation memory, a test suite, retry and backoff, Docker, CI.
+conversation memory, retry and backoff, Docker, CI.
