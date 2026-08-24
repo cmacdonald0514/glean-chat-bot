@@ -1,24 +1,16 @@
-"""Search -> Passage objects, plus the relevance floor.
-
-Glean's Search API returns no relevance score, so the floor is computed here as
-term overlap: the fraction of the question's content words present in the
-retrieved passages. It is lexical, so a pure paraphrase scores lower than it
-deserves - which is why the threshold is an environment variable.
-"""
-
-from __future__ import annotations
+"""Search -> Passage objects, plus the relevance floor."""
 
 import logging
 import re
 
 from glean.api_client import Glean, models
 
-from client import act_as_headers
-from config import Settings
-from logs import log_call
-from models.documents import Passage
+from glean_chat_bot.client import act_as_headers
+from glean_chat_bot.models import Passage
+from glean_chat_bot.utils.config import Settings
+from glean_chat_bot.utils.logging import log_call
 
-log = logging.getLogger("glean_chat_bot.retrieval")
+log = logging.getLogger("glean_chat_bot.search")
 
 # Question words are included because "what/how/many" appear in nearly every
 # question and would inflate every overlap score identically.

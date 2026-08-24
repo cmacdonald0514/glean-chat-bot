@@ -1,26 +1,16 @@
-"""ask() - the one orchestration function. The CLI and the MCP tool both call it.
-
-    retrieve -> apply the floor -> (short-circuit | generate) -> resolve citations
-
-This never indexes. Ingestion is a separate lifecycle stage, and Glean indexing
-takes minutes, so a re-index triggered by a query could not help that query.
-"""
-
-from __future__ import annotations
-
 import logging
 import time
 
-from client import query_client
-from config import Settings
-from models.answers import Answer
-from query.generation import generate
-from query.retrieval import passes_floor, search
+from glean_chat_bot.client import query_client
+from glean_chat_bot.models import Answer
+from glean_chat_bot.query.chat import generate
+from glean_chat_bot.query.search import passes_floor, search
+from glean_chat_bot.utils.config import Settings
 
-log = logging.getLogger("glean_chat_bot.pipeline")
+log = logging.getLogger("glean_chat_bot.ask")
 
-# Enforced here rather than per transport, so the CLI obeys the same bounds the
-# MCP tool advertises in its schema.
+# Enforced here rather than per transport, so any caller of ask() obeys the same
+# bounds the MCP tool advertises in its schema.
 MIN_TOP_K = 1
 MAX_TOP_K = 20
 

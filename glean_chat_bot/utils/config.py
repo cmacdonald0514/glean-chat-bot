@@ -1,14 +1,8 @@
-"""Environment-driven configuration.
-
-Two constructors, so the read path never holds the indexing token: for_query()
-does not read GLEAN_INDEXING_TOKEN at all.
-"""
-
-from __future__ import annotations
-
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 from dotenv import load_dotenv
 
@@ -31,20 +25,20 @@ def _optional(name: str, default: str) -> str:
     return os.environ.get(name, "").strip() or default
 
 
-def _float_env(name: str, default: float) -> float:
+def _number_env[T: (int, float)](name: str, default: T, cast: Callable[[str], T]) -> T:
     raw = _optional(name, str(default))
     try:
-        return float(raw)
+        return cast(raw)
     except ValueError as exc:
-        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
+        raise ConfigError(f"{name} must be a valid {cast.__name__}, got {raw!r}") from exc
+
+
+def _float_env(name: str, default: float) -> float:
+    return _number_env(name, default, float)
 
 
 def _int_env(name: str, default: int) -> int:
-    raw = _optional(name, str(default))
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ConfigError(f"{name} must be an integer, got {raw!r}") from exc
+    return _number_env(name, default, int)
 
 
 def _require_dir(name: str) -> Path:
@@ -86,7 +80,7 @@ class Settings:
     docs_root: Path | None = None
 
     @classmethod
-    def for_indexing(cls) -> Settings:
+    def for_indexing(cls) -> Self:
         return cls(
             **_common(),
             indexing_token=_require("GLEAN_INDEXING_TOKEN"),
@@ -94,7 +88,7 @@ class Settings:
         )
 
     @classmethod
-    def for_query(cls) -> Settings:
+    def for_query(cls) -> Self:
         return cls(**_common(), client_token=_require("GLEAN_CLIENT_TOKEN"))
 
     def namespaced_doc_id(self, doc_id: str) -> str:

@@ -1,7 +1,3 @@
-"""Logging setup and the timing wrapper every Glean call goes through."""
-
-from __future__ import annotations
-
 import contextlib
 import logging
 import sys
@@ -11,7 +7,7 @@ log = logging.getLogger("glean_chat_bot.api")
 
 
 def configure_logging(verbose: bool) -> None:
-    """Logs go to stderr so `ask --json | jq` stays a clean pipe."""
+    """Logs go to stderr: the MCP stdio transport owns stdout for JSON-RPC."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",

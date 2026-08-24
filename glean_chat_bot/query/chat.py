@@ -1,19 +1,16 @@
 """Numbered passages in, grounded answer plus resolved citations out."""
 
-from __future__ import annotations
-
 import logging
 import re
 
 from glean.api_client import Glean, models
 
-from client import act_as_headers
-from config import Settings
-from logs import log_call
-from models.answers import Source
-from models.documents import Passage
+from glean_chat_bot.client import act_as_headers
+from glean_chat_bot.models import Passage, Source
+from glean_chat_bot.utils.config import Settings
+from glean_chat_bot.utils.logging import log_call
 
-log = logging.getLogger("glean_chat_bot.generation")
+log = logging.getLogger("glean_chat_bot.chat")
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 

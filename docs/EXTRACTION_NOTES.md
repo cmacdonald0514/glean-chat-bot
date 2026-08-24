@@ -14,7 +14,7 @@ what made the original corpus unrealistic.
 The pipeline doesn't change shape. It gains one stage at the front:
 
 ```
-source files → extract (text + metadata) → index → verify → search → chat
+source files → extract (text + metadata) → index → search → chat
                    ^
                    one adapter per file type
 ```
@@ -52,7 +52,7 @@ places, in descending order of trust:
 4. **Filesystem stat.** Modified time as a last resort, and a poor one, because
    a bulk migration rewrites every mtime to the same day.
 
-`extraction/walker.py` implements exactly this precedence. Note one deliberate inversion:
+`extraction.py` implements exactly this precedence. Note one deliberate inversion:
 **path and filename override embedded status**. A file sitting in `Archive/`
 is archived regardless of what its properties claim, because people move files
 and forget to update properties far more often than the reverse.

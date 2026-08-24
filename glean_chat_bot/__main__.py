@@ -1,25 +1,13 @@
-"""MCP server exposing exactly one tool: ask_company_docs.
-
-Indexing deliberately stays a human-run admin command rather than a second tool:
-it takes minutes and replaces the datasource contents.
-
-Note mcp 2.0 renamed FastMCP to MCPServer; `from mcp.server.fastmcp import
-FastMCP`, which most tutorials still show, does not exist in 2.x.
-"""
-
-from __future__ import annotations
-
 import logging
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
-from config import ConfigError, Settings
-from logs import configure_logging
-from models.answers import Answer
-from query.pipeline import MAX_TOP_K, MIN_TOP_K
-from query.pipeline import ask as pipeline_ask
+from glean_chat_bot.models import Answer
+from glean_chat_bot.query.ask import MAX_TOP_K, MIN_TOP_K, ask
+from glean_chat_bot.utils.config import ConfigError, Settings
+from glean_chat_bot.utils.logging import configure_logging
 
 log = logging.getLogger("glean_chat_bot.mcp")
 
@@ -124,7 +112,7 @@ def ask_company_docs(
     """
     log.info("tool call: question=%r top_k=%s", question, top_k)
     try:
-        answer = pipeline_ask(
+        answer = ask(
             question,
             top_k=top_k,
             include_citations=include_citations,
@@ -142,8 +130,8 @@ def ask_company_docs(
                 f"do not substitute your own knowledge for the missing answer."
             ),
             diagnostics={"error": kind, "detail": str(exc), "chat_called": False},
-        ).to_dict()
-    return answer.to_dict()
+        ).model_dump()
+    return answer.model_dump()
 
 
 def main() -> None:

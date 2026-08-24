@@ -1,10 +1,6 @@
-"""SDK client factories, one per token, so the wrong one cannot be asked for."""
-
-from __future__ import annotations
-
 from glean.api_client import Glean
 
-from config import ConfigError, Settings
+from glean_chat_bot.utils.config import ConfigError, Settings
 
 
 def indexing_client(settings: Settings) -> Glean:
