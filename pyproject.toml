@@ -1,0 +1,47 @@
+[project]
+name = "glean-chat-bot"
+version = "0.1.0"
+description = "Grounded question answering over local documents, via Glean's Search, Chat and Indexing APIs."
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "glean-api-client>=0.16.0",
+    "mcp>=2.0.0",
+    "pydantic>=2.13",
+    "python-docx>=1.2.0",
+    "openpyxl>=3.1.5",
+    "pypdf>=6.0.0",
+    "python-dotenv>=1.2.0",
+]
+
+[project.scripts]
+glean-chat-bot = "cli:main"
+
+[tool.poetry]
+packages = [
+    { include = "cli.py", from = "src" },
+    { include = "client.py", from = "src" },
+    { include = "config.py", from = "src" },
+    { include = "logs.py", from = "src" },
+    { include = "mcp_server.py", from = "src" },
+    { include = "extraction", from = "src" },
+    { include = "indexing", from = "src" },
+    { include = "models", from = "src" },
+    { include = "query", from = "src" },
+]
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.14"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]
+# SIM905 would flatten the STOP_WORDS block into one 400-char list literal.
+ignore = ["SIM905"]
