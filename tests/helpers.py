@@ -7,26 +7,45 @@ environment -- only the config test goes through `Settings.for_query()`,
 because that test is specifically about env loading.
 """
 
-import os
 import re
 
-from glean_chat_bot.models import Passage
+from glean_chat_bot.extraction import DOC_ID_PATTERN
+from glean_chat_bot.models import Answer, Passage
 from glean_chat_bot.query.chat import CITATION_PATTERN
-from glean_chat_bot.utils.config import Settings
+from glean_chat_bot.utils.config import ConfigError, Settings
+
+# The fake identity the offline suite runs under. Named because the fixtures,
+# the server subprocess env and several assertions all have to agree on it.
+TEST_INSTANCE = "test-instance"
+TEST_DATASOURCE = "testds"
+TEST_CLIENT_TOKEN = "test-client-token"
+
+# The minimum the read path needs; conftest sets it, the startup test passes it
+# to the subprocess.
+QUERY_ENV = {
+    "GLEAN_INSTANCE": TEST_INSTANCE,
+    "GLEAN_DATASOURCE": TEST_DATASOURCE,
+    "GLEAN_CLIENT_TOKEN": TEST_CLIENT_TOKEN,
+}
+
+# The envelope ask() returns. Read off the model rather than transcribed, so a
+# field added to Answer cannot leave these assertions quietly checking the old
+# shape.
+ENVELOPE_KEYS = frozenset(Answer.model_fields)
 
 
 def make_settings(**overrides) -> Settings:
     """A query-scoped Settings with no environment involved."""
     base = {
-        "instance": "test-instance",
-        "datasource": "testds",
+        "instance": TEST_INSTANCE,
+        "datasource": TEST_DATASOURCE,
         "doc_id_prefix": "halcyon",
         "default_top_k": 5,
         "max_snippet_size": 2000,
         "min_term_overlap": 0.30,
         "act_as": "",
         "chat_timeout_ms": 60000,
-        "client_token": "test-client-token",
+        "client_token": TEST_CLIENT_TOKEN,
     }
     return Settings(**{**base, **overrides})
 
@@ -46,12 +65,23 @@ def make_passages(*texts: str) -> list[Passage]:
 
 
 def env_has_live_credentials() -> bool:
-    return bool(os.environ.get("GLEAN_CLIENT_TOKEN", "").strip())
+    """Whether the read path can be constructed at all.
+
+    Goes through `Settings.for_query()` rather than checking a variable name,
+    because that constructor is the single source of what the read path needs:
+    a missing GLEAN_INSTANCE should skip the live suite too, not blow up in
+    fixture setup.
+    """
+    try:
+        Settings.for_query()
+    except ConfigError:
+        return False
+    return True
 
 
 # Glean prefixes doc ids with the datasource and object type; the eval set uses
 # the short form, so assertions compare on the trailing DEPT-NNN.
-SHORT_DOC_ID = re.compile(r"[A-Z]+-\d+$")
+SHORT_DOC_ID = re.compile(DOC_ID_PATTERN + "$")
 
 
 def short_ids(full_doc_ids) -> set[str]:
@@ -73,6 +103,7 @@ BASE_KEYS = frozenset(
         "term_overlap",
         "min_term_overlap",
         "retrieved_doc_ids",
+        "status_filter",
         "floor_passed",
         "floor_reason",
         "chat_called",
@@ -83,13 +114,12 @@ CHAT_KEYS = frozenset({"passages_sent", "citations_unresolved", "glean_inline_ci
 
 
 def assert_answer_envelope(payload: dict) -> None:
-    assert set(payload) == {"answer", "sources", "diagnostics"}
+    assert set(payload) == ENVELOPE_KEYS
     assert payload["answer"].strip(), "answer must be non-empty text"
 
     diagnostics = payload["diagnostics"]
-    assert not BASE_KEYS - set(diagnostics), (
-        f"diagnostics missing contract keys: {sorted(BASE_KEYS - set(diagnostics))}"
-    )
+    missing = BASE_KEYS - set(diagnostics)
+    assert not missing, f"diagnostics missing contract keys: {sorted(missing)}"
 
     for source in payload["sources"]:
         # An unresolved marker is a citation we could not tie to a passage. It
@@ -104,7 +134,8 @@ def assert_answer_envelope(payload: dict) -> None:
     if not diagnostics["chat_called"]:
         return
 
-    assert not CHAT_KEYS - set(diagnostics)
+    missing = CHAT_KEYS - set(diagnostics)
+    assert not missing, f"diagnostics missing chat keys: {sorted(missing)}"
     assert diagnostics["citations_unresolved"] == [], (
         f"answer cited passages that were never retrieved: {diagnostics['citations_unresolved']}"
     )

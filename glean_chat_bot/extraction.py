@@ -9,7 +9,13 @@ import openpyxl
 from docx import Document
 from pypdf import PdfReader
 
-from glean_chat_bot.models import ExtractedDoc
+from glean_chat_bot.models import (
+    ACTIVE_STATUS,
+    ARCHIVED_STATUS,
+    DRAFT_STATUS,
+    STATUSES,
+    ExtractedDoc,
+)
 
 # Below this, a body is an extraction failure rather than a short document.
 # indexing.py imports it so the warning and the skip agree.
@@ -17,6 +23,10 @@ MIN_BODY_CHARS = 200
 
 # The one metadata field both the PDF and the xlsx templates carry.
 OWNER_PATTERN = r"Owner:\s*([^|\n]+)"
+
+# The corpus-wide document ID shape (FIN-011). Both templates embed it and the
+# eval suite matches citations on it, so it is declared once.
+DOC_ID_PATTERN = r"[A-Z]+-\d+"
 
 BASE_URL = "https://drive.halcyon.io/shared"
 
@@ -68,7 +78,7 @@ def extract_pdf(path: str) -> dict:
 
     # PDFs converted from Word keep no useful info dict, so parse the
     # doc-control line the template puts under the title.
-    _capture(meta, "doc_id", r"Document ID:\s*([A-Z]+-\d+)", text)
+    _capture(meta, "doc_id", rf"Document ID:\s*({DOC_ID_PATTERN})", text)
     _capture(meta, "author", OWNER_PATTERN, text)
     _capture(meta, "classification", r"Classification:\s*(\w+)", text)
     _capture(meta, "status", r"Status:\s*(\w+)", text)
@@ -89,7 +99,7 @@ def extract_xlsx(path: str) -> dict:
     body = "\n".join(parts)
 
     meta = {"body": body}
-    _capture(meta, "doc_id", r"Document ([A-Z]+-\d+)", body)
+    _capture(meta, "doc_id", rf"Document ({DOC_ID_PATTERN})", body)
     _capture(meta, "author", OWNER_PATTERN, body)
     return meta
 
@@ -113,9 +123,9 @@ def department_from_path(rel_path: str) -> str:
 def status_from_path(rel_path: str, filename: str) -> str | None:
     upper = f"{rel_path} {filename}".upper()
     if "ARCHIVE" in upper or "SUPERSEDED" in upper or "(OLD)" in upper:
-        return "Archived"
+        return ARCHIVED_STATUS
     if "DRAFT" in upper:
-        return "Draft"
+        return DRAFT_STATUS
     return None
 
 
@@ -162,7 +172,7 @@ def extract(path: str, root: str) -> ExtractedDoc | None:
         classification=raw.get("classification", "Internal"),
         # Path and filename override embedded status: a file in Archive/ is
         # archived whatever its properties claim.
-        status=path_status or raw.get("status", "Active"),
+        status=path_status or raw.get("status", ACTIVE_STATUS),
         author=raw.get("author"),
         created=raw.get("created"),
         # os.stat only runs when the file carried no embedded modified time.
@@ -171,6 +181,13 @@ def extract(path: str, root: str) -> ExtractedDoc | None:
         file_type=ext.lstrip("."),
         warnings=raw.get("warnings", []),
     )
+    if doc.status not in STATUSES:
+        # The read path filters on an exact status match, so a value outside the
+        # vocabulary makes the document unreachable without any error anywhere.
+        doc.warnings.append(
+            f"Unrecognized status {doc.status!r}; the query path retrieves "
+            f"{ACTIVE_STATUS} only, so this document will never be returned."
+        )
     if not doc.body.strip():
         doc.warnings.append("Empty body after extraction.")
     return doc

@@ -1,5 +1,18 @@
 from pydantic import BaseModel, Field
 
+# The custom property carrying document status, and its vocabulary. It lives
+# here, in the module both paths already import, because both ends have to agree
+# on it: indexing.py declares the property under this name, search.py filters on
+# it for ACTIVE_STATUS. A mismatch at either end fails silently -- it returns
+# nothing -- so tests/test_contract.py asserts the two stay in sync.
+STATUS_PROPERTY = "halcyonStatus"
+ACTIVE_STATUS = "Active"
+ARCHIVED_STATUS = "Archived"
+DRAFT_STATUS = "Draft"
+# Anything outside this set is invisible to the read path, since the facet
+# filter is an exact match. extraction.py warns rather than guessing.
+STATUSES = frozenset({ACTIVE_STATUS, ARCHIVED_STATUS, DRAFT_STATUS})
+
 
 class ExtractedDoc(BaseModel):
     """One local file, normalized into what the indexing API wants."""
@@ -12,7 +25,7 @@ class ExtractedDoc(BaseModel):
     department: str
     doc_type: str = "reference"
     classification: str = "Internal"
-    status: str = "Active"
+    status: str = ACTIVE_STATUS
     author: str | None = None
     created: str | None = None
     modified: str | None = None

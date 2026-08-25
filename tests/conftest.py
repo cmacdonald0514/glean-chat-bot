@@ -5,7 +5,7 @@ import os
 import pytest
 
 from glean_chat_bot.utils.config import Settings
-from tests.helpers import make_settings
+from tests.helpers import QUERY_ENV, make_settings
 
 
 @pytest.fixture
@@ -20,9 +20,8 @@ def clean_env(monkeypatch):
     """
     for name in [name for name in os.environ if name.startswith("GLEAN_")]:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("GLEAN_INSTANCE", "test-instance")
-    monkeypatch.setenv("GLEAN_DATASOURCE", "testds")
-    monkeypatch.setenv("GLEAN_CLIENT_TOKEN", "test-client-token")
+    for name, value in QUERY_ENV.items():
+        monkeypatch.setenv(name, value)
 
 
 @pytest.fixture

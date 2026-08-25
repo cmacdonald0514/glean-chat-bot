@@ -6,11 +6,36 @@ import re
 from glean.api_client import Glean, models
 
 from glean_chat_bot.client import act_as_headers
-from glean_chat_bot.models import Passage
+from glean_chat_bot.models import ACTIVE_STATUS, STATUS_PROPERTY, Passage
 from glean_chat_bot.utils.config import Settings
 from glean_chat_bot.utils.logging import log_call
 
 log = logging.getLogger("glean_chat_bot.search")
+
+
+def active_only_filter() -> list[models.FacetFilter]:
+    """Restrict retrieval to documents whose status is Active.
+
+    EQUALS Active, never a negation: the negated form matched exactly the
+    archived document against this instance, and `is_negated` is deprecated for
+    removal in October 2026. CLAUDE.md has the full rationale.
+    """
+    return [
+        models.FacetFilter(
+            # Glean lowercases custom-property names when exposing them as facet
+            # fields, so `halcyonStatus` is filtered on as `halcyonstatus`. The
+            # camelCase name matches zero documents and does not error, which is
+            # why it is derived here rather than retyped.
+            field_name=STATUS_PROPERTY.lower(),
+            values=[
+                models.FacetFilterValue(
+                    value=ACTIVE_STATUS,
+                    relation_type=models.RelationType.EQUALS,
+                )
+            ],
+        )
+    ]
+
 
 # Question words are included because "what/how/many" appear in nearly every
 # question and would inflate every overlap score identically.
@@ -92,6 +117,8 @@ def search(
                 facet_bucket_size=10,
                 # Never retrieve outside the corpus we pushed.
                 datasources_filter=[settings.datasource],
+                # ...and never retrieve a superseded document from inside it.
+                facet_filters=active_only_filter(),
                 # Makes "snippets" RAG-sized chunks rather than ~200 chars of
                 # keyword context, which is too little for Chat to answer from.
                 return_llm_content_over_snippets=True,
@@ -126,6 +153,10 @@ def search(
         "term_overlap": round(overlap, 3),
         "min_term_overlap": settings.min_term_overlap,
         "retrieved_doc_ids": [p.doc_id for p in passages],
+        # Part of the contract: a caller seeing zero results needs to know
+        # retrieval was scoped to active documents before concluding the
+        # corpus does not cover the question.
+        "status_filter": ACTIVE_STATUS,
     }
     log.info(
         "retrieved %d passage(s), term_overlap=%.2f (floor %.2f)",

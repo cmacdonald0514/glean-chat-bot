@@ -1,0 +1,22 @@
+# .env holds live tokens and .venv is a host venv built against another Python;
+# neither belongs in an image.
+.env
+.venv/
+.git/
+.gitignore
+.idea/
+.claude/
+
+# The query path never reads the corpus.
+data/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+tests/
+*.md
+Dockerfile
+.dockerignore
+docker-compose.yml

@@ -94,13 +94,13 @@ def test_eval_case(case, live_settings):
     assert set(case.expect_retrieved) <= retrieved, (
         f"expected {case.expect_retrieved} retrieved, got {retrieved}"
     )
-    # The archived document may come back from search; it must not be cited.
-    leaked = set(case.forbid_cited) & cited
-    assert not leaked, (
-        f"cited superseded document(s) {sorted(leaked)}. Filtering on "
-        f"`status: active` in search.py is the fix. {case.note}"
+    # Retirement is enforced at retrieval: a superseded document must never have
+    # reached Chat at all, so there is nothing for Chat to have ignored.
+    reached_chat = set(case.forbid_retrieved) & retrieved
+    assert not reached_chat, (
+        f"retrieved superseded document(s) {sorted(reached_chat)}: the active-only "
+        f"facet filter in search.py is not matching. {case.note}"
     )
-
     missing = [phrase for phrase in case.must_contain if normalize(phrase) not in answer]
     assert not missing, f"answer is missing {missing}: {payload['answer']!r}"
 

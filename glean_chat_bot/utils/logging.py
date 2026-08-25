@@ -7,12 +7,24 @@ log = logging.getLogger("glean_chat_bot.api")
 
 
 def configure_logging(verbose: bool) -> None:
-    """Logs go to stderr: the MCP stdio transport owns stdout for JSON-RPC."""
+    """Logs go to stderr, where uvicorn's access log on stdout cannot interleave.
+
+    force=True because constructing the MCPServer installs a root stderr handler
+    of its own (the SDK calls basicConfig from MCPServer.__init__), and
+    __main__.py builds the server at import time -- so by the time an entrypoint
+    calls this, basicConfig would be a silent no-op and both the format and -v
+    would be dropped. uvicorn keeps its handlers on its own non-propagating
+    loggers, so reclaiming the root logger does not disturb them.
+
+    This makes configure_logging entrypoint-only by contract: calling it from
+    library code would tear down a caller's handlers.
+    """
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stderr,
+        force=True,
     )
 
 

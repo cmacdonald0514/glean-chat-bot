@@ -1,3 +1,4 @@
+import argparse
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -95,3 +96,82 @@ class Settings:
         """Apply the shared-sandbox prefix, idempotently: HR-004 and halcyon-HR-004 both work."""
         prefix = f"{self.doc_id_prefix}-"
         return doc_id if doc_id.startswith(prefix) else prefix + doc_id
+
+
+# The loopback set the SDK would apply on its own if we bound to 127.0.0.1. We
+# name it explicitly because the container binds 0.0.0.0, where the SDK's
+# default is no protection at all rather than this list.
+DEFAULT_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+
+# Loopback unless something says otherwise. Both images override it to 0.0.0.0,
+# which is safe only because each server states its own exposure rules -- the
+# MCP server an explicit Host allowlist, the indexer an unpublished port. One
+# home for the default so that policy cannot drift between the two.
+DEFAULT_BIND_HOST = "127.0.0.1"
+
+
+def _listen_env(prefix: str, default_port: int) -> dict:
+    """`MCP_HOST`/`MCP_PORT`, `INDEXER_HOST`/`INDEXER_PORT` - one convention, read once."""
+    return {
+        "host": _optional(f"{prefix}_HOST", DEFAULT_BIND_HOST),
+        "port": _int_env(f"{prefix}_PORT", default_port),
+    }
+
+
+def listener_parser(prog: str, description: str, defaults) -> argparse.ArgumentParser:
+    """The flags every server entrypoint takes, so the two cannot drift apart.
+
+    Both servers are launched the same way and should stay launchable the same
+    way; `--host`/`--port` override what `*_HOST`/`*_PORT` supplied.
+    """
+    parser = argparse.ArgumentParser(prog=prog, description=description)
+    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    parser.add_argument("--host", default=defaults.host, help=f"bind address [{defaults.host}]")
+    parser.add_argument("--port", type=int, default=defaults.port, help=f"port [{defaults.port}]")
+    return parser
+
+
+@dataclass(frozen=True)
+class ServerOptions:
+    """Where the MCP server listens. Deliberately not part of `Settings`.
+
+    `Settings.for_query()` / `for_indexing()` are the token-separation seam; a
+    bind address is not a Glean credential and must not travel through them.
+    """
+
+    host: str
+    port: int
+    allowed_hosts: tuple[str, ...]
+
+    @classmethod
+    def from_env(cls) -> Self:
+        # Split only what the environment actually set: the default is ours and
+        # is already in its parsed shape.
+        raw = _optional("MCP_ALLOWED_HOSTS", "")
+        return cls(
+            **_listen_env("MCP", 8000),
+            allowed_hosts=tuple(h.strip() for h in raw.split(",") if h.strip())
+            or DEFAULT_ALLOWED_HOSTS,
+        )
+
+
+@dataclass(frozen=True)
+class IndexerOptions:
+    """Where the indexing service listens, and where its trigger CLI points.
+
+    Separate from `Settings` for the same reason `ServerOptions` is: a bind
+    address is not a Glean credential and must not travel through the
+    token-separation seam. Separate from `ServerOptions` because the two
+    processes are deployed apart - the cron sidecar sets `INDEXER_URL` and holds
+    no Glean token at all.
+    """
+
+    host: str
+    port: int
+    # None because the default is a URL built from the route path, which is
+    # defined by the service module rather than here. Typed so that is visible.
+    trigger_url: str | None
+
+    @classmethod
+    def from_env(cls) -> Self:
+        return cls(**_listen_env("INDEXER", 8001), trigger_url=_optional("INDEXER_URL", "") or None)

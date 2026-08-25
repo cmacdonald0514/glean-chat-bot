@@ -14,10 +14,12 @@ Cases are grouped into tuples by what they test, and CASES concatenates them:
   MULTI_DOC     Whether retrieval pulls more than the single best hit and the
                 citations list every document the answer drew on.
   SUPERSEDED    The archived document that contradicts the active one. The most
-                valuable group in the set: FIN-007 is still retrievable, so the
-                test asserts it is retrieved *and* not cited. If it starts
-                getting cited, that is a real retrieval-quality finding --
-                filtering on `status: active` in search.py is the fix.
+                valuable group in the set: search.py filters retrieval to
+                `status: Active`, so these assert FIN-007 never comes back at
+                all. If it reappears, the facet filter has stopped matching --
+                silently, because a facet name Glean does not recognise returns
+                zero results rather than an error -- and the retired figures are
+                reaching Chat again.
   AMBIGUOUS     Whether the bot disambiguates instead of guessing. Asserted
                 weakly on purpose: only that the floor was cleared and several
                 documents came back, never on phrasing.
@@ -29,7 +31,7 @@ Cases are grouped into tuples by what they test, and CASES concatenates them:
                 immediately.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -42,18 +44,21 @@ class EvalCase:
     expect_cited: tuple[str, ...] = ()
     # Short doc ids that must come back from search, cited or not.
     expect_retrieved: tuple[str, ...] = ()
-    # Short doc ids the answer must NOT cite, e.g. the archived FIN-007.
-    forbid_cited: tuple[str, ...] = ()
+    # Short doc ids search must not return at all, e.g. the archived FIN-007.
+    # Asserted at retrieval rather than at citation because cited ids are a
+    # subset of retrieved ones: keeping the document out of Chat's context is
+    # the guarantee, not trusting Chat to ignore it.
+    forbid_retrieved: tuple[str, ...] = ()
     # Case-insensitive substrings the answer must contain.
     must_contain: tuple[str, ...] = ()
     # The wrong prior, or the superseded figure. Must be absent.
     must_not_contain: tuple[str, ...] = ()
     top_k: int | None = None
-    note: str = field(default="")
+    note: str = ""
     # A gap the system has today, with the reason. A case carrying one is
     # xfailed entirely, so the suite stays green while the gap stays visible
     # -- and reports XPASS the moment it is fixed.
-    known_gap: str = field(default="")
+    known_gap: str = ""
 
 
 SINGLE_FACT = (
@@ -147,22 +152,22 @@ SUPERSEDED = (
         id="meal-per-diem",
         question="What's the meal per diem for domestic travel?",
         expect_cited=("FIN-011",),
-        forbid_cited=("FIN-007",),
-        expect_retrieved=("FIN-007",),
+        forbid_retrieved=("FIN-007",),
         must_contain=("75",),
         must_not_contain=("$50",),
         note=(
-            "expense-policy-2023-ARCHIVED.md (FIN-007) deliberately contradicts the "
-            "active FIN-011. FIN-007 is still retrievable, so this asserts it comes "
-            "back from search and is not cited. A citation to it, or a $50 answer, is "
-            "the archived-document problem resurfacing."
+            "Finance/Archive/Expense Policy 2023 (SUPERSEDED).docx (FIN-007) "
+            "deliberately contradicts the active FIN-011 on this exact figure. The "
+            "active-only facet filter should keep it out of retrieval entirely, so "
+            "this asserts it never comes back at all. A $50 answer is the "
+            "archived-document problem resurfacing."
         ),
     ),
     EvalCase(
         id="corporate-card",
         question="What corporate card do we use?",
         expect_cited=("FIN-011",),
-        forbid_cited=("FIN-007",),
+        forbid_retrieved=("FIN-007",),
         must_contain=("ramp",),
         must_not_contain=("brex",),
         note="Brex is the superseded answer in FIN-007.",

@@ -2,17 +2,23 @@ import logging
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from glean_chat_bot.models import Answer
 from glean_chat_bot.query.ask import MAX_TOP_K, MIN_TOP_K, ask
-from glean_chat_bot.utils.config import ConfigError, Settings
+from glean_chat_bot.utils.config import ConfigError, ServerOptions, Settings, listener_parser
 from glean_chat_bot.utils.logging import configure_logging
 
 log = logging.getLogger("glean_chat_bot.mcp")
 
 # Built once at startup by main() and reused by every tool call.
 SETTINGS: Settings | None = None
+
+MCP_PATH = "/mcp"
+HEALTH_PATH = "/healthz"
 
 mcp = MCPServer(
     name="glean-company-docs",
@@ -134,18 +140,61 @@ def ask_company_docs(
     return answer.model_dump()
 
 
-def main() -> None:
+@mcp.custom_route(HEALTH_PATH, methods=["GET"])
+async def healthz(request: Request) -> PlainTextResponse:
+    """Process liveness for the container healthcheck.
+
+    Deliberately does not touch Glean or the token: an unreachable Glean is a
+    tool-call failure that comes back in the Answer envelope with diagnostics,
+    not a reason for the orchestrator to restart a healthy process.
+    """
+    return PlainTextResponse("ok")
+
+
+def _transport_security(allowed_hosts: tuple[str, ...]) -> TransportSecuritySettings:
+    """Host/Origin allowlist for the streamable-HTTP transport.
+
+    The SDK only auto-enables DNS-rebinding protection when the bind address is
+    loopback; binding 0.0.0.0 with no settings turns the check off entirely
+    rather than rejecting anything. The container has to bind 0.0.0.0 to be
+    reachable, so the allowlist is stated here and kept independent of it.
+    """
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(allowed_hosts),
+        allowed_origins=[f"http://{host}" for host in allowed_hosts],
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
     global SETTINGS
 
-    # stderr, not stdout: the stdio transport uses stdout for JSON-RPC, and one
-    # stray print there corrupts the protocol.
-    configure_logging(verbose=False)
+    defaults = ServerOptions.from_env()
+    parser = listener_parser(
+        "glean-mcp", "Serve the Halcyon docs MCP tool over streamable HTTP.", defaults
+    )
+    args = parser.parse_args(argv)
+
+    # stderr, not stdout: uvicorn writes its own access log to stdout, and
+    # keeping application logs on the other stream leaves both readable.
+    configure_logging(args.verbose)
+    # mcp.run() builds uvicorn's config from this, so -v has to reach it here
+    # or the transport keeps logging at INFO while the app logs at DEBUG.
+    if args.verbose:
+        mcp.settings.log_level = "DEBUG"
     # Fail at startup rather than on the first tool call, so a misconfigured
     # server shows up as a connection error and not a broken tool.
     SETTINGS = Settings.for_query()
-    log.info("glean-company-docs MCP server starting on stdio")
-    mcp.run(transport="stdio")
+    log.info("glean-company-docs MCP server on http://%s:%s%s", args.host, args.port, MCP_PATH)
+    mcp.run(
+        transport="streamable-http",
+        host=args.host,
+        port=args.port,
+        streamable_http_path=MCP_PATH,
+        transport_security=_transport_security(defaults.allowed_hosts),
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

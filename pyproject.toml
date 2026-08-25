@@ -11,10 +11,17 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pypdf>=6.0.0",
     "python-dotenv>=1.2.0",
+    # Already present transitively via mcp; named here because indexd.py is
+    # the first code to import them directly.
+    "starlette>=1.6",
+    "uvicorn>=0.52",
 ]
 
 [project.scripts]
 glean-index = "glean_chat_bot.indexing:main"
+glean-indexd = "glean_chat_bot.indexd:main"
+glean-index-trigger = "glean_chat_bot.indexd:trigger"
+glean-mcp = "glean_chat_bot.__main__:main"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.14"
