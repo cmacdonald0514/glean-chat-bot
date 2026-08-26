@@ -1,5 +1,3 @@
-"""Numbered passages in, grounded answer plus resolved citations out."""
-
 import logging
 import re
 
@@ -42,7 +40,7 @@ def resolve_citations(answer_text: str, passages: list[Passage]) -> list[Source]
     """Map every [n] in the answer back to a retrieved passage.
 
     A marker with no matching passage comes back resolved=False rather than
-    being dropped: silently dropping it would hide a hallucinated citation.
+    being dropped: dropping it would hide a hallucinated citation.
     """
     by_marker = {p.marker: p for p in passages}
     sources: list[Source] = []
@@ -80,9 +78,8 @@ def _extract_reply(response: models.ChatResponse) -> tuple[str, list[dict], list
             errors.extend(f.text for f in message.fragments or [] if f.text)
             continue
 
-        # CONTENT (or unset) is the answer. UPDATE and CONTROL_* are progress
-        # and stream framing, kept only as a fallback so a relabelled reply
-        # never comes back as an empty answer.
+        # CONTENT (or unset) is the answer; UPDATE and CONTROL_* are progress and
+        # stream framing, kept only as a fallback for a relabelled reply.
         target = (
             content_parts
             if message.message_type in (None, models.MessageType.CONTENT)
@@ -105,8 +102,7 @@ def _extract_reply(response: models.ChatResponse) -> tuple[str, list[dict], list
     if not answer_text and other_parts:
         answer_text = "".join(other_parts).strip()
         log.warning(
-            "no CONTENT message in chat response; fell back to %d other fragment(s). "
-            "Check what message_type Glean returned.",
+            "no CONTENT message in chat response; fell back to %d other fragment(s)",
             len(other_parts),
         )
     return answer_text, inline_citations, errors
@@ -126,9 +122,8 @@ def generate(
     ) as rec:
         response = client.client.chat.create(
             http_headers=act_as_headers(settings),
-            # Instructions and passages go in a CONTEXT message, the question in
-            # a CONTENT one, so the question is not buried under thousands of
-            # characters of passage text.
+            # Instructions and passages in a CONTEXT message, the question in a
+            # CONTENT one, so the question is not buried under the passage text.
             messages=[
                 models.ChatMessage(
                     author=models.Author.USER,
@@ -141,11 +136,9 @@ def generate(
                     message_type=models.MessageType.CONTENT,
                 ),
             ],
+            # GPT with both tool sets off is what disables Glean's own retrieval,
+            # so the only citations to resolve are the [n] markers we numbered.
             agent_config=models.AgentConfig(
-                # GPT talks straight to the model, and both tool sets off, is
-                # what disables Glean's own retrieval. Chat therefore has
-                # nothing of its own to cite, so the citations we resolve are
-                # the [n] markers against passages we numbered ourselves.
                 agent=models.AgentEnum.GPT,
                 tool_sets=models.ToolSets(
                     enable_web_search=False,
@@ -153,11 +146,10 @@ def generate(
                 ),
             ),
             save_chat=False,
-            # Server-side budget, so Glean returns a 408 rather than holding the
-            # connection open...
+            # A server-side budget, so Glean returns a 408...
             timeout_millis=settings.chat_timeout_ms,
-            # ...and a slightly longer client read timeout, so that 408 arrives
-            # instead of the socket dying first.
+            # ...and a longer client read timeout, so that 408 arrives instead of
+            # the socket dying first.
             timeout_ms=settings.chat_timeout_ms + 5000,
         )
         answer_text, inline_citations, errors = _extract_reply(response)
@@ -173,8 +165,8 @@ def generate(
         "chat_errors": errors,
         "citations_resolved": [source.marker for source in sources if source.resolved],
         "citations_unresolved": unresolved,
-        # Expected to be 0 while Chat retrieval is disabled; non-zero means
-        # Glean started citing on its own and this code needs revisiting.
+        # Expected to stay empty: non-zero means Glean started retrieving on its
+        # own and this design needs revisiting.
         "glean_inline_citations": inline_citations,
     }
     if unresolved:

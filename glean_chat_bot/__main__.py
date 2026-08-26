@@ -1,3 +1,4 @@
+import argparse
 import logging
 from typing import Annotated
 
@@ -9,7 +10,7 @@ from starlette.responses import PlainTextResponse
 
 from glean_chat_bot.models import Answer
 from glean_chat_bot.query.ask import MAX_TOP_K, MIN_TOP_K, ask
-from glean_chat_bot.utils.config import ConfigError, ServerOptions, Settings, listener_parser
+from glean_chat_bot.utils.config import ConfigError, ServerOptions, Settings
 from glean_chat_bot.utils.logging import configure_logging
 
 log = logging.getLogger("glean_chat_bot.mcp")
@@ -108,13 +109,18 @@ def ask_company_docs(
                    source with resolved=false means the answer cited a passage
                    that was not retrieved; treat that claim as unverified.
       diagnostics  what was searched and what came back, including
-                   results_returned, term_overlap against the relevance floor,
-                   whether the floor was passed, and whether chat ran. If the
-                   answer is a no-results response, read these before retrying:
-                   results_returned=0 means nothing matched at all, while a
-                   non-zero count with floor_passed=false means the documents
-                   exist but your phrasing did not match their wording - retry
-                   once with the terminology the documents would use.
+                   results_returned, the min_results floor, whether the floor
+                   was passed, and whether chat ran. If the answer is a
+                   no-results response, read these before retrying:
+                   results_returned=0 means Glean's own search ranked nothing
+                   as relevant, which is either a genuine gap in the corpus or
+                   phrasing far from the documents' wording - retry at most
+                   once using the terminology the documents would use, and
+                   treat a second empty result as authoritative. A non-zero
+                   count with floor_passed=false is not a phrasing problem:
+                   it means the documents came back without readable text, or
+                   the server requires more corroborating results than Glean
+                   returned, and rephrasing will not help.
     """
     log.info("tool call: question=%r top_k=%s", question, top_k)
     try:
@@ -125,8 +131,8 @@ def ask_company_docs(
             settings=SETTINGS,
         )
     except Exception as exc:
-        # Every failure becomes the same envelope the caller already knows how
-        # to read, rather than an opaque tool error with no diagnostics.
+        # The same envelope the caller already knows how to read, rather than an
+        # opaque tool error carrying no diagnostics.
         kind = "config" if isinstance(exc, ConfigError) else "api"
         log.exception("tool call failed (%s)", kind)
         return Answer(
@@ -142,22 +148,18 @@ def ask_company_docs(
 
 @mcp.custom_route(HEALTH_PATH, methods=["GET"])
 async def healthz(request: Request) -> PlainTextResponse:
-    """Process liveness for the container healthcheck.
-
-    Deliberately does not touch Glean or the token: an unreachable Glean is a
-    tool-call failure that comes back in the Answer envelope with diagnostics,
-    not a reason for the orchestrator to restart a healthy process.
-    """
+    """Process liveness only. Makes no Glean call: an unreachable Glean is a
+    tool-call failure in the Answer envelope, not a reason to restart a healthy
+    process."""
     return PlainTextResponse("ok")
 
 
 def _transport_security(allowed_hosts: tuple[str, ...]) -> TransportSecuritySettings:
     """Host/Origin allowlist for the streamable-HTTP transport.
 
-    The SDK only auto-enables DNS-rebinding protection when the bind address is
-    loopback; binding 0.0.0.0 with no settings turns the check off entirely
-    rather than rejecting anything. The container has to bind 0.0.0.0 to be
-    reachable, so the allowlist is stated here and kept independent of it.
+    Stated explicitly because the SDK auto-enables DNS-rebinding protection only
+    on a loopback bind: on the container's 0.0.0.0, passing nothing turns the
+    Host check off rather than rejecting anything.
     """
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -170,20 +172,21 @@ def main(argv: list[str] | None = None) -> int:
     global SETTINGS
 
     defaults = ServerOptions.from_env()
-    parser = listener_parser(
-        "glean-mcp", "Serve the Halcyon docs MCP tool over streamable HTTP.", defaults
+    parser = argparse.ArgumentParser(
+        prog="glean-mcp", description="Serve the Halcyon docs MCP tool over streamable HTTP."
     )
+    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    parser.add_argument("--host", default=defaults.host, help=f"bind address [{defaults.host}]")
+    parser.add_argument("--port", type=int, default=defaults.port, help=f"port [{defaults.port}]")
     args = parser.parse_args(argv)
 
-    # stderr, not stdout: uvicorn writes its own access log to stdout, and
-    # keeping application logs on the other stream leaves both readable.
     configure_logging(args.verbose)
-    # mcp.run() builds uvicorn's config from this, so -v has to reach it here
-    # or the transport keeps logging at INFO while the app logs at DEBUG.
+    # mcp.run() builds uvicorn's config from this, so -v has to reach it here or
+    # the transport keeps logging at INFO while the app logs at DEBUG.
     if args.verbose:
         mcp.settings.log_level = "DEBUG"
-    # Fail at startup rather than on the first tool call, so a misconfigured
-    # server shows up as a connection error and not a broken tool.
+    # At startup, not on the first tool call: a misconfigured server should fail
+    # to come up rather than serve a broken tool.
     SETTINGS = Settings.for_query()
     log.info("glean-company-docs MCP server on http://%s:%s%s", args.host, args.port, MCP_PATH)
     mcp.run(

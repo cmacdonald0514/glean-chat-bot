@@ -1,22 +1,14 @@
 from pydantic import BaseModel, Field
 
-# The custom property carrying document status, and its vocabulary. It lives
-# here, in the module both paths already import, because both ends have to agree
-# on it: indexing.py declares the property under this name, search.py filters on
-# it for ACTIVE_STATUS. A mismatch at either end fails silently -- it returns
-# nothing -- so tests/test_contract.py asserts the two stay in sync.
 STATUS_PROPERTY = "halcyonStatus"
 ACTIVE_STATUS = "Active"
 ARCHIVED_STATUS = "Archived"
 DRAFT_STATUS = "Draft"
-# Anything outside this set is invisible to the read path, since the facet
-# filter is an exact match. extraction.py warns rather than guessing.
 STATUSES = frozenset({ACTIVE_STATUS, ARCHIVED_STATUS, DRAFT_STATUS})
 
 
 class ExtractedDoc(BaseModel):
     """One local file, normalized into what the indexing API wants."""
-
     doc_id: str
     title: str
     body: str
@@ -35,7 +27,6 @@ class ExtractedDoc(BaseModel):
 
 class Passage(BaseModel):
     """One retrieved chunk of one document, as returned by Search."""
-
     marker: int  # 1-based; the [n] the model is told to cite
     doc_id: str
     title: str
@@ -45,7 +36,6 @@ class Passage(BaseModel):
 
 class Source(BaseModel):
     """A citation the model emitted, after we tried to resolve it."""
-
     marker: int
     resolved: bool
     doc_id: str | None = None
@@ -55,7 +45,6 @@ class Source(BaseModel):
 
 class Answer(BaseModel):
     """The envelope the MCP tool returns."""
-
     answer: str
     sources: list[Source] = Field(default_factory=list)
     diagnostics: dict = Field(default_factory=dict)

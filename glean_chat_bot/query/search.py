@@ -1,7 +1,4 @@
-"""Search -> Passage objects, plus the relevance floor."""
-
 import logging
-import re
 
 from glean.api_client import Glean, models
 
@@ -14,18 +11,9 @@ log = logging.getLogger("glean_chat_bot.search")
 
 
 def active_only_filter() -> list[models.FacetFilter]:
-    """Restrict retrieval to documents whose status is Active.
-
-    EQUALS Active, never a negation: the negated form matched exactly the
-    archived document against this instance, and `is_negated` is deprecated for
-    removal in October 2026. CLAUDE.md has the full rationale.
-    """
+    """Restrict retrieval to documents whose status is Active."""
     return [
         models.FacetFilter(
-            # Glean lowercases custom-property names when exposing them as facet
-            # fields, so `halcyonStatus` is filtered on as `halcyonstatus`. The
-            # camelCase name matches zero documents and does not error, which is
-            # why it is derived here rather than retyped.
             field_name=STATUS_PROPERTY.lower(),
             values=[
                 models.FacetFilterValue(
@@ -37,47 +25,21 @@ def active_only_filter() -> list[models.FacetFilter]:
     ]
 
 
-# Question words are included because "what/how/many" appear in nearly every
-# question and would inflate every overlap score identically.
-STOP_WORDS = frozenset(
-    """
-    a an and are as at be been but by can do does for from get give had has have
-    how i if in into is it its many me much my of on or our ours should so than
-    that the their there these they this to was we what when where which who
-    why will with would you your
-    """.split()
-)
-
-
-def content_words(text: str) -> list[str]:
-    # \w+ keeps "401k" as one token; splitting it would let "401" match a dollar
-    # figure and give a question with no answer a non-zero score.
-    tokens = re.findall(r"\w+", text.lower())
-    return [t for t in tokens if t not in STOP_WORDS and len(t) > 1]
-
-
-def term_overlap(question: str, passages: list[Passage]) -> float:
-    terms = set(content_words(question))
-    if not terms or not passages:
-        return 0.0
-    corpus = " ".join(p.text.lower() for p in passages)
-    return sum(1 for term in terms if term in corpus) / len(terms)
-
-
-def passes_floor(passages: list[Passage], overlap: float, min_overlap: float) -> tuple[bool, str]:
+def passes_floor(passages: list[Passage], min_results: int) -> tuple[bool, str]:
     """Decide whether these passages are worth sending to Chat, and say why not.
 
-    Takes the overlap search() already computed, so the number reported in
-    diagnostics is provably the number this gate used.
+    The relevance judgement is Glean's, not ours. Glean's Search API returns no
+    per-result score to threshold, because ranking is expressed in what comes
+    back: a query the corpus does not cover returns zero results, and a query it
+    does cover returns fewer than `page_size` rather than padding to fill it.
+    Scoring the passages again here would only second-guess that ranking with a
+    weaker signal, so the floor reads Glean's answer instead of recomputing one.
     """
-    if not passages:
-        return False, "no_results"
+    if len(passages) < min_results:
+        return False, "below_result_floor"
     if not any(p.text.strip() for p in passages):
-        # Matched documents with no usable text. Sending those to Chat is the
-        # same as sending nothing, and Chat would answer from priors.
+        # Matched documents with no usable text: Chat would answer from priors.
         return False, "no_passage_text"
-    if overlap < min_overlap:
-        return False, "below_overlap_floor"
     return True, "passed"
 
 
@@ -115,9 +77,7 @@ def search(
             request_options=models.SearchRequestOptions(
                 # Required by the model even though nothing here reads facets.
                 facet_bucket_size=10,
-                # Never retrieve outside the corpus we pushed.
                 datasources_filter=[settings.datasource],
-                # ...and never retrieve a superseded document from inside it.
                 facet_filters=active_only_filter(),
                 # Makes "snippets" RAG-sized chunks rather than ~200 chars of
                 # keyword context, which is too little for Chat to answer from.
@@ -141,7 +101,6 @@ def search(
             )
         )
 
-    overlap = term_overlap(question, passages)
     diagnostics = {
         "query": question,
         "datasource_searched": settings.datasource,
@@ -150,18 +109,19 @@ def search(
         "results_returned": len(passages),
         "request_id": response.request_id,
         "backend_time_millis": response.backend_time_millis,
-        "term_overlap": round(overlap, 3),
-        "min_term_overlap": settings.min_term_overlap,
+        "min_results": settings.min_results,
+        # Glean truncates at its own relevance boundary rather than padding to
+        # page_size, so a count below top_k is a ranking signal, not a shortfall.
+        "results_truncated_by_glean": len(passages) < k,
         "retrieved_doc_ids": [p.doc_id for p in passages],
-        # Part of the contract: a caller seeing zero results needs to know
-        # retrieval was scoped to active documents before concluding the
-        # corpus does not cover the question.
+        # Reported so a caller seeing zero results knows retrieval was scoped to
+        # active documents before concluding the corpus does not cover it.
         "status_filter": ACTIVE_STATUS,
     }
     log.info(
-        "retrieved %d passage(s), term_overlap=%.2f (floor %.2f)",
+        "retrieved %d passage(s) of %d requested (floor %d)",
         len(passages),
-        overlap,
-        settings.min_term_overlap,
+        k,
+        settings.min_results,
     )
     return passages, diagnostics

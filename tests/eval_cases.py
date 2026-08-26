@@ -1,36 +1,3 @@
-"""The Halcyon Robotics eval set: the read path's regression suite.
-
-Every expected answer here is invented. None of it is guessable from general
-knowledge, which is the point -- if the bot answers correctly, retrieval worked
-and the answer came from the corpus rather than from the model's priors.
-
-Doc ids are the short form (`FIN-011`). Glean returns them fully qualified
-(`CUSTOM_INTERVIEWDS3_Document_halcyon-FIN-011`), so assertions match on the
-suffix via `helpers.short_ids`.
-
-Cases are grouped into tuples by what they test, and CASES concatenates them:
-
-  SINGLE_FACT   Baseline. One document, one fact, one citation.
-  MULTI_DOC     Whether retrieval pulls more than the single best hit and the
-                citations list every document the answer drew on.
-  SUPERSEDED    The archived document that contradicts the active one. The most
-                valuable group in the set: search.py filters retrieval to
-                `status: Active`, so these assert FIN-007 never comes back at
-                all. If it reappears, the facet filter has stopped matching --
-                silently, because a facet name Glean does not recognise returns
-                zero results rather than an error -- and the retired figures are
-                reaching Chat again.
-  AMBIGUOUS     Whether the bot disambiguates instead of guessing. Asserted
-                weakly on purpose: only that the floor was cleared and several
-                documents came back, never on phrasing.
-  OUT_OF_SCOPE  The grounded refusal. Nothing in the corpus covers these, so
-                the floor must reject them and Chat must never run. This is the
-                path that proves answers are grounded rather than generated.
-  PRIOR_TRAPS   Questions where a model has a strong, wrong prior for Halcyon.
-                Answering from priors instead of the documents shows up here
-                immediately.
-"""
-
 from dataclasses import dataclass
 
 
@@ -40,34 +7,29 @@ class EvalCase:
     question: str
     # False means the refusal path: the floor must reject and Chat must not run.
     grounded: bool = True
-    # Short doc ids that must appear among the cited sources.
     expect_cited: tuple[str, ...] = ()
-    # Short doc ids that must come back from search, cited or not.
     expect_retrieved: tuple[str, ...] = ()
-    # Short doc ids search must not return at all, e.g. the archived FIN-007.
-    # Asserted at retrieval rather than at citation because cited ids are a
-    # subset of retrieved ones: keeping the document out of Chat's context is
-    # the guarantee, not trusting Chat to ignore it.
+    # Asserted at retrieval, not at citation: keeping a superseded document out
+    # of Chat's context is the guarantee, not trusting Chat to ignore it.
     forbid_retrieved: tuple[str, ...] = ()
-    # Case-insensitive substrings the answer must contain.
+    # Case-insensitive substrings the answer must (not) contain.
     must_contain: tuple[str, ...] = ()
-    # The wrong prior, or the superseded figure. Must be absent.
     must_not_contain: tuple[str, ...] = ()
     top_k: int | None = None
     note: str = ""
-    # A gap the system has today, with the reason. A case carrying one is
-    # xfailed entirely, so the suite stays green while the gap stays visible
-    # -- and reports XPASS the moment it is fixed.
+    # A real gap in retrieval today. A case carrying one is xfailed with this as
+    # the reason, so the suite stays green while the gap stays visible.
     known_gap: str = ""
 
 
+# One document, one fact, one citation.
 SINGLE_FACT = (
     EvalCase(
         id="pto-days",
         question="How many PTO days do I get?",
         expect_cited=("HR-004",),
         must_contain=("18",),
-        note="Baseline. Should be fast, confident, one citation.",
+        note="Baseline: fast, confident, one citation.",
     ),
     EvalCase(
         id="deploy-freeze",
@@ -86,10 +48,7 @@ SINGLE_FACT = (
         question="What VPN does Halcyon use?",
         expect_cited=("IT-014",),
         must_contain=("tailscale",),
-        note=(
-            "AnyConnect is the plausible wrong answer, but naming it as "
-            "decommissioned is correct, so it is not forbidden text."
-        ),
+        note="AnyConnect is the plausible wrong answer; naming it as decommissioned is correct.",
     ),
     EvalCase(
         id="home-office-stipend",
@@ -99,6 +58,7 @@ SINGLE_FACT = (
     ),
 )
 
+# Whether retrieval pulls more than the single best hit, and cites all of it.
 MULTI_DOC = (
     EvalCase(
         id="new-hire-travel",
@@ -138,15 +98,17 @@ MULTI_DOC = (
         question="Who approves a two-week vacation in November if I'm on Field Ops?",
         expect_retrieved=("HR-004",),
         top_k=10,
-        note="VP approval, plus the Oct 15 - Dec 15 blackout.",
-        known_gap=(
-            "HR-004, the correct document, IS retrieved -- but term overlap lands at "
-            "0.29 against a 0.30 floor, so the answer is refused. A false negative "
-            "from the relevance floor, not a retrieval miss."
+        note=(
+            "VP approval, plus the Oct 15 - Dec 15 blackout. Was a known gap while "
+            "the floor rescored Glean's results locally: HR-004 was retrieved but "
+            "refused at 0.29 term overlap against a 0.30 floor. Deferring the "
+            "relevance call to Glean removed the false negative."
         ),
     ),
 )
 
+# The archived document that contradicts the active one. The most valuable group
+# in the set: these assert FIN-007 never comes back at all.
 SUPERSEDED = (
     EvalCase(
         id="meal-per-diem",
@@ -155,13 +117,7 @@ SUPERSEDED = (
         forbid_retrieved=("FIN-007",),
         must_contain=("75",),
         must_not_contain=("$50",),
-        note=(
-            "Finance/Archive/Expense Policy 2023 (SUPERSEDED).docx (FIN-007) "
-            "deliberately contradicts the active FIN-011 on this exact figure. The "
-            "active-only facet filter should keep it out of retrieval entirely, so "
-            "this asserts it never comes back at all. A $50 answer is the "
-            "archived-document problem resurfacing."
-        ),
+        note="FIN-007 (archived) contradicts the active FIN-011 on this exact figure.",
     ),
     EvalCase(
         id="corporate-card",
@@ -174,6 +130,8 @@ SUPERSEDED = (
     ),
 )
 
+# Whether the bot disambiguates instead of guessing. Asserted weakly on purpose:
+# never on phrasing.
 AMBIGUOUS = (
     EvalCase(
         id="hotel-limit",
@@ -188,12 +146,14 @@ AMBIGUOUS = (
     ),
 )
 
+# The grounded refusal. Nothing in the corpus covers these, so the floor must
+# reject them and Chat must never run.
 OUT_OF_SCOPE = (
     EvalCase(
         id="401k-match",
         question="What's our 401k employer match?",
         grounded=False,
-        note="Not in the corpus. The refusal must name the datasource searched.",
+        note="The refusal must name the datasource searched.",
     ),
     EvalCase(
         id="ceo-name",
@@ -215,22 +175,19 @@ OUT_OF_SCOPE = (
     ),
 )
 
+# Questions where a model has a strong, wrong prior for Halcyon.
 PRIOR_TRAPS = (
     EvalCase(
         id="expense-submission-window",
         question="How long do I have to submit an expense?",
         must_contain=("30 days",),
-        note=(
-            "The common prior is 60 or 90 days; Halcyon is 30. '60 days' is not "
-            "forbidden text: FIN-011 uses it for the CFO-approval cutoff, so a "
-            "correct answer mentions both figures."
-        ),
+        note="The prior is 60 or 90 days; Halcyon is 30. FIN-011 also uses 60 for the CFO cutoff.",
     ),
     EvalCase(
         id="merit-increases",
         question="When do merit increases happen?",
         must_contain=("march",),
-        note="The prior is annually in January. Halcyon runs a March cycle, effective April 1.",
+        note="The prior is January. Halcyon runs a March cycle, effective April 1.",
     ),
     EvalCase(
         id="anchor-days",
@@ -254,8 +211,3 @@ CASES: tuple[EvalCase, ...] = (
     *OUT_OF_SCOPE,
     *PRIOR_TRAPS,
 )
-
-# The order that tells the story, if you are running these by hand: pto-days
-# (a clean single-source answer), procurement-approval (multi-document
-# synthesis), 401k-match (the grounded refusal), meal-per-diem (the
-# archived-document problem).

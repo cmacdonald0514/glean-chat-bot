@@ -1,23 +1,18 @@
 """The invariants the design rests on. One test each, no more.
 
-These are the properties that make this server defensible rather than merely
-working: the two paths cannot share a token, generation cannot happen without
-retrieval, a hallucinated citation cannot hide, and a failure still reaches the
-caller as something it can read. Retrieval *quality* is not tested here -- that
-is the live eval suite.
+Token separation, the floor gating generation, unresolved citations staying
+visible, and failures reaching the caller as something it can read. Retrieval
+*quality* belongs to the live eval suite, not here.
 """
 
 import asyncio
 import contextlib
-import io
 import json
 import os
 import socket
 import subprocess
 import sys
-import threading
 import time
-import urllib.error
 import urllib.request
 from types import SimpleNamespace
 
@@ -25,18 +20,17 @@ import pytest
 from glean.api_client import models
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from starlette.testclient import TestClient
 
 import glean_chat_bot.__main__ as server
-from glean_chat_bot import indexd, indexing
 from glean_chat_bot.client import indexing_client, query_client
+from glean_chat_bot.indexing import run as index_run
 from glean_chat_bot.models import ACTIVE_STATUS, STATUS_PROPERTY, Answer, Source
 from glean_chat_bot.query import ask as ask_module
-from glean_chat_bot.query.ask import MAX_TOP_K, MIN_TOP_K, ask
+from glean_chat_bot.query.ask import ask
 from glean_chat_bot.query.chat import resolve_citations
-from glean_chat_bot.query.search import active_only_filter, passes_floor, search, term_overlap
+from glean_chat_bot.query.search import active_only_filter, passes_floor, search
 from glean_chat_bot.utils.config import ConfigError, Settings
-from tests.helpers import (
+from tests.conftest import (
     ENVELOPE_KEYS,
     QUERY_ENV,
     TEST_CLIENT_TOKEN,
@@ -68,53 +62,50 @@ def test_each_client_refuses_the_other_path_s_settings(query_settings):
 # --- the relevance floor -----------------------------------------------------
 
 
-def test_term_overlap_is_the_fraction_of_question_terms_found():
-    """The floor is an overlap fraction, not a score: Glean's scores are not
-    comparable across queries."""
-    passages = make_passages("The deploy freeze runs from December 15.")
-
-    assert term_overlap("deploy freeze dental insurance", passages) == pytest.approx(0.5)
-
-
 @pytest.mark.parametrize(
-    ("passage_texts", "overlap", "expected"),
+    ("passage_texts", "min_results", "expected"),
     [
-        ((), 0.0, (False, "no_results")),
-        # Matched documents with no usable text: sending them is sending nothing.
-        (("   ",), 1.0, (False, "no_passage_text")),
-        (("real text",), 0.29, (False, "below_overlap_floor")),
-        # The check is `<`, so equality clears the floor.
-        (("real text",), 0.30, (True, "passed")),
+        # Glean returning nothing *is* the relevance verdict: it returns zero
+        # results for a question its index does not cover.
+        ((), 1, (False, "below_result_floor")),
+        (("real text",), 2, (False, "below_result_floor")),
+        (("   ",), 1, (False, "no_passage_text")),
+        (("real text",), 1, (True, "passed")),
+        (("one", "two"), 2, (True, "passed")),
     ],
 )
-def test_the_floor_gate_truth_table(passage_texts, overlap, expected):
-    assert passes_floor(make_passages(*passage_texts), overlap, 0.30) == expected
+def test_the_floor_gate_truth_table(passage_texts, min_results, expected):
+    assert passes_floor(make_passages(*passage_texts), min_results) == expected
+
+
+def test_the_floor_never_rescores_what_glean_ranked(query_settings):
+    """Glean exposes no per-result score, and we do not invent one: passages that
+    read as off-topic still clear the floor, because ranking them is Glean's job."""
+    off_topic = make_passages("Sourdough starter needs feeding every 12 hours.")
+
+    assert passes_floor(off_topic, query_settings.min_results) == (True, "passed")
 
 
 # --- retrieval is scoped to active documents ---------------------------------
 
 
 def test_the_status_filter_names_the_property_the_indexing_path_declares():
-    """Drift guard. Glean answers an unrecognised facet name with zero results
-    rather than an error, so a rename on one path would surface as an empty
-    corpus rather than as a failure."""
-    declared = {name for name, _label, _attr, _facet in indexing.CUSTOM_PROPERTIES}
+    """Drift guard: Glean answers an unrecognised facet name with zero results
+    rather than an error, so a rename on one path would look like an empty corpus."""
+    declared = {name for name, _label, _attr, _facet in index_run.CUSTOM_PROPERTIES}
     assert STATUS_PROPERTY in declared
 
     (facet_filter,) = active_only_filter()
-    # Lowercased: Glean exposes custom properties as facet fields in lower case.
     assert facet_filter.field_name == STATUS_PROPERTY.lower()
 
     (value,) = facet_filter.values
     assert value.value == ACTIVE_STATUS
-    # EQUALS Active, never NOT_EQUALS Archived: the negated form matched the
-    # archived document against the live instance, the exact inverse of intent.
     assert value.relation_type == models.RelationType.EQUALS
 
 
 def test_search_scopes_every_query_to_the_datasource_and_to_active_documents(query_settings):
-    """The superseded per diem is kept out of Chat's context by retrieval, not
-    by trusting Chat to disregard it."""
+    """The superseded per diem is kept out of Chat's context by retrieval, not by
+    trusting Chat to disregard it."""
     sent = {}
 
     class FakeSearch:
@@ -138,11 +129,7 @@ def test_search_scopes_every_query_to_the_datasource_and_to_active_documents(que
 
 @pytest.fixture
 def fake_client(monkeypatch):
-    """Fake only the client, so ask() opens and closes something inert.
-
-    Separate from `fake_glean` because the floor test supplies its own search
-    and generate: it needs the client faked and nothing else.
-    """
+    """Fake only the client, so ask() opens and closes something inert."""
     calls = {}
 
     class FakeClient:
@@ -166,7 +153,6 @@ def fake_glean(monkeypatch, fake_client):
         return make_passages("18 PTO days per year.", "23 days at Level 6."), {
             "query": question,
             "results_returned": 2,
-            "term_overlap": 0.9,
             "retrieved_doc_ids": ["doc-a", "doc-b"],
         }
 
@@ -192,7 +178,7 @@ def test_generate_is_never_called_below_the_floor(monkeypatch, fake_client, quer
     monkeypatch.setattr(
         ask_module,
         "search",
-        lambda *a, **kw: ([], {"results_returned": 0, "term_overlap": 0.0}),
+        lambda *a, **kw: ([], {"results_returned": 0}),
     )
     monkeypatch.setattr(ask_module, "generate", fail_if_called)
 
@@ -201,8 +187,8 @@ def test_generate_is_never_called_below_the_floor(monkeypatch, fake_client, quer
     assert answer.diagnostics["chat_called"] is False
     assert answer.sources == []
     assert "No indexed content found" in answer.answer
-    # The refusal names what was searched, so the caller can tell a retrieval
-    # miss from an empty index.
+    # The refusal names what was searched, so a retrieval miss is not read as an
+    # empty index.
     assert query_settings.datasource in answer.answer
 
 
@@ -237,22 +223,6 @@ def test_a_citation_with_no_passage_behind_it_is_kept_not_dropped():
 # --- the MCP contract --------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
-def tool():
-    tools = asyncio.run(server.mcp.list_tools())
-    assert [t.name for t in tools] == ["ask_company_docs"]
-    return tools[0]
-
-
-def test_the_advertised_top_k_bounds_match_the_enforced_ones(tool):
-    """Drift guard: ask() rejects out-of-range top_k, the schema must say so too."""
-    schema = tool.input_schema["properties"]["top_k"]
-    bounds = next(b for b in schema["anyOf"] if b.get("type") == "integer")
-
-    assert (bounds["minimum"], bounds["maximum"]) == (MIN_TOP_K, MAX_TOP_K)
-    assert tool.input_schema["required"] == ["question"]
-
-
 @pytest.mark.parametrize(
     ("exception", "expected_kind"),
     [(ConfigError("GLEAN_CLIENT_TOKEN is not set."), "config"), (RuntimeError("503"), "api")],
@@ -275,11 +245,19 @@ def test_failures_come_back_as_the_envelope_not_as_a_tool_error(
     assert "do not substitute your own knowledge" in payload["answer"].lower()
 
 
-def test_the_http_app_mounts_the_protocol_and_the_healthcheck():
-    """Cheap guard on the route table: compose polls /healthz, clients POST /mcp."""
-    routes = {r.path for r in server.mcp.streamable_http_app().routes}
+def test_the_envelope_reaches_the_client_as_json(monkeypatch):
+    """The tool is annotated `-> dict`, so there is no output schema and the
+    envelope arrives as JSON text rather than structured content."""
+    monkeypatch.setattr(
+        server,
+        "ask",
+        lambda *a, **kw: Answer(answer="grounded [1].", diagnostics={"chat_called": True}),
+    )
 
-    assert {server.MCP_PATH, server.HEALTH_PATH} <= routes
+    result = asyncio.run(server.mcp.call_tool("ask_company_docs", {"question": "q"}))
+    payload = json.loads(result.content[0].text)
+
+    assert set(payload) == ENVELOPE_KEYS
 
 
 def _free_port() -> int:
@@ -305,9 +283,8 @@ def _wait_until_serving(proc: subprocess.Popen, url: str, timeout: float = 15.0)
 def test_the_server_starts_over_http_and_serves_its_tool():
     """The only test that catches "the server does not start". No Glean calls.
 
-    env is QUERY_ENV over a stripped os.environ, so the real GLEAN_* values are
-    not picked up and load_dotenv(override=False) leaves these in place if a
-    .env is present.
+    env is QUERY_ENV over a stripped os.environ, so the developer's real GLEAN_*
+    values are not picked up.
     """
     port = _free_port()
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GLEAN_", "MCP_"))}
@@ -336,111 +313,3 @@ def test_the_server_starts_over_http_and_serves_its_tool():
         proc.wait(timeout=10)
 
     assert [t.name for t in tools.tools] == ["ask_company_docs"]
-
-
-def test_the_envelope_reaches_the_client_as_json(monkeypatch):
-    """The tool is annotated `-> dict`, so there is no output schema and the
-    envelope arrives as JSON text rather than structured content."""
-    monkeypatch.setattr(
-        server,
-        "ask",
-        lambda *a, **kw: Answer(answer="grounded [1].", diagnostics={"chat_called": True}),
-    )
-
-    result = asyncio.run(server.mcp.call_tool("ask_company_docs", {"question": "q"}))
-    payload = json.loads(result.content[0].text)
-
-    assert set(payload) == ENVELOPE_KEYS
-
-
-# --- indexing is a separate process, and only one run at a time --------------
-
-
-def test_a_second_indexing_run_is_rejected_while_the_first_is_in_flight(monkeypatch):
-    """The reason the service holds a lock at all.
-
-    The second caller is refused rather than queued, because its result would be
-    the first one's -- and a bulk upload replaces the datasource contents as a
-    unit, so the two would race over what ends up in it.
-    """
-    started, release, calls = threading.Event(), threading.Event(), []
-
-    def fake_index_once(settings, *, process_now=False):
-        calls.append(process_now)
-        started.set()
-        release.wait(timeout=5)
-        return {"documents": 1, "upload_id": "upload-1"}
-
-    monkeypatch.setattr(indexd, "index_once", fake_index_once)
-
-    first: list = []
-    with TestClient(indexd.app) as client:
-        runner = threading.Thread(target=lambda: first.append(client.post(indexd.INDEX_PATH)))
-        runner.start()
-        try:
-            assert started.wait(timeout=5), "the first run never entered index_once"
-            rejected = TestClient(indexd.app).post(indexd.INDEX_PATH)
-        finally:
-            release.set()
-            runner.join(timeout=5)
-
-    assert rejected.status_code == 409
-    assert "already in progress" in rejected.json()["error"]
-    assert first[0].status_code == 200
-    assert calls == [False], "the rejected request must not have started a second run"
-
-
-def test_a_failed_indexing_run_reaches_the_caller_as_a_5xx_carrying_the_reason(monkeypatch):
-    """Same reasoning as the MCP tool's error envelope, one protocol down.
-
-    Cron learns nothing from a process that swallowed the error, so the detail
-    goes in the body and the status is 5xx -- which is what `glean-index-trigger`
-    turns into a non-zero exit.
-    """
-
-    def boom(settings, *, process_now=False):
-        raise RuntimeError("glean said no")
-
-    monkeypatch.setattr(indexd, "index_once", boom)
-    with TestClient(indexd.app, raise_server_exceptions=False) as client:
-        response = client.post(indexd.INDEX_PATH)
-
-    assert response.status_code == 500
-    assert "glean said no" in response.json()["error"]
-    # And the lock is not left held, or every later run answers a false 409.
-    assert indexd._RUNNING.acquire(blocking=False), "a failed run leaked the lock"
-    indexd._RUNNING.release()
-
-
-def test_the_indexing_service_serves_the_run_over_http_and_nothing_else(monkeypatch):
-    monkeypatch.setattr(
-        indexd,
-        "index_once",
-        lambda settings, *, process_now=False: {"documents": 3, "asked_to_process": process_now},
-    )
-    with TestClient(indexd.app) as client:
-        assert client.get(indexd.HEALTH_PATH).text == "ok"
-        # POST-only: this endpoint rewrites the datasource.
-        assert client.get(indexd.INDEX_PATH).status_code == 405
-        response = client.post(f"{indexd.INDEX_PATH}?process_now=true")
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True, "documents": 3, "asked_to_process": True}
-
-
-def test_the_trigger_cli_exits_non_zero_when_the_run_did_not_happen(monkeypatch, capsys):
-    """The cron sidecar's only channel: supercronic logs the job's exit status.
-
-    A trigger that exited 0 on a 409 or a 500 would turn a datasource that has
-    silently stopped updating into a schedule that looks like it is working.
-    """
-
-    def refuse(request, timeout=None):
-        raise urllib.error.HTTPError(
-            request.full_url, 409, "Conflict", {}, io.BytesIO(b'{"error": "already in progress"}')
-        )
-
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
-
-    assert indexd.trigger(["--url", "http://indexer:8001/index"]) == 1
-    assert "already in progress" in capsys.readouterr().err

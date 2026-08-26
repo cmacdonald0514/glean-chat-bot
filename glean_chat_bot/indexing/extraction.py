@@ -16,16 +16,15 @@ from glean_chat_bot.models import (
     STATUSES,
     ExtractedDoc,
 )
+from glean_chat_bot.utils.config import DEFAULT_MIN_BODY_CHARS
 
-# Below this, a body is an extraction failure rather than a short document.
-# indexing.py imports it so the warning and the skip agree.
-MIN_BODY_CHARS = 200
+# The required num of chars in documents for them to be indexed
+MIN_BODY_CHARS = DEFAULT_MIN_BODY_CHARS
 
 # The one metadata field both the PDF and the xlsx templates carry.
 OWNER_PATTERN = r"Owner:\s*([^|\n]+)"
 
-# The corpus-wide document ID shape (FIN-011). Both templates embed it and the
-# eval suite matches citations on it, so it is declared once.
+# The corpus-wide document ID shape (FIN-011).
 DOC_ID_PATTERN = r"[A-Z]+-\d+"
 
 BASE_URL = "https://drive.halcyon.io/shared"
@@ -159,13 +158,13 @@ def extract(path: str, root: str) -> ExtractedDoc | None:
     path_status = status_from_path(rel, filename)
 
     doc = ExtractedDoc(
-        # Derived from path so re-runs upsert rather than duplicate.
+        # Path-derived, so re-runs upsert rather than duplicate.
         doc_id=raw.get("doc_id") or "PATH-" + slugify(rel),
         title=raw.get("title") or stem,
         body=raw.get("body", ""),
         source_path=rel,
-        # Glean 400s the whole batch on one malformed viewURL, and every folder
-        # in this corpus has a space in its name.
+        # quote() because Glean 400s the whole batch on one malformed viewURL,
+        # and every folder in this corpus has a space in its name.
         view_url=f"{BASE_URL}/{quote(rel.replace(os.sep, '/'))}",
         department=raw.get("department") or department_from_path(rel),
         doc_type=raw.get("doc_type") or doc_type_from_filename(filename),
@@ -182,8 +181,6 @@ def extract(path: str, root: str) -> ExtractedDoc | None:
         warnings=raw.get("warnings", []),
     )
     if doc.status not in STATUSES:
-        # The read path filters on an exact status match, so a value outside the
-        # vocabulary makes the document unreachable without any error anywhere.
         doc.warnings.append(
             f"Unrecognized status {doc.status!r}; the query path retrieves "
             f"{ACTIVE_STATUS} only, so this document will never be returned."

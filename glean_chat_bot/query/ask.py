@@ -9,23 +9,21 @@ from glean_chat_bot.utils.config import Settings
 
 log = logging.getLogger("glean_chat_bot.ask")
 
-# Enforced here rather than per transport, so any caller of ask() obeys the same
-# bounds the MCP tool advertises in its schema.
 MIN_TOP_K = 1
 MAX_TOP_K = 20
 
 FLOOR_REASONS = {
-    "no_results": "Search returned no results from datasource '{datasource}'.",
+    "below_result_floor": (
+        "Glean's search ranked nothing in datasource '{datasource}' as relevant "
+        "enough to return for this question ({n} result(s), floor {floor}). "
+        "Glean returns no results at all for a question its index does not "
+        "cover, so this is its relevance judgement, not a threshold of ours."
+    ),
     "no_passage_text": (
         "Search returned {n} result(s) from datasource '{datasource}', but Glean "
         "returned no readable text for them. That is a content or permissions "
-        "problem rather than a relevance one, so lowering the relevance floor "
+        "problem rather than a relevance one, so lowering the result floor "
         "will not help."
-    ),
-    "below_overlap_floor": (
-        "Search returned {n} result(s) from datasource '{datasource}', but they "
-        "were not relevant enough to the question (term overlap {overlap:.2f}, "
-        "floor {floor:.2f})."
     ),
 }
 
@@ -35,8 +33,7 @@ def _no_results_answer(settings: Settings, diagnostics: dict) -> Answer:
     reason = FLOOR_REASONS[diagnostics["floor_reason"]].format(
         datasource=settings.datasource,
         n=diagnostics["results_returned"],
-        overlap=diagnostics["term_overlap"],
-        floor=settings.min_term_overlap,
+        floor=settings.min_results,
     )
     return Answer(
         answer=(
@@ -55,11 +52,7 @@ def ask(
     include_citations: bool = True,
     settings: Settings | None = None,
 ) -> Answer:
-    """Answer one question from indexed Halcyon documents.
-
-    settings is injectable so a long-lived caller builds it once. It defaults to
-    a query-scoped Settings, which by construction carries no indexing token.
-    """
+    """Answer one question from indexed Halcyon documents."""
     settings = settings or Settings.for_query()
     if top_k is not None and not MIN_TOP_K <= top_k <= MAX_TOP_K:
         raise ValueError(f"top_k must be between {MIN_TOP_K} and {MAX_TOP_K}, got {top_k}")
@@ -67,14 +60,12 @@ def ask(
     started = time.perf_counter()
 
     # One client for the whole question, so chat reuses the connection search
-    # opened. `with` closes it deterministically rather than leaving the SDK's
-    # reference cycle to a GC pass, which matters in the long-lived MCP server.
+    # opened, and `with` closes it rather than leaving the SDK's reference cycle
+    # to a GC pass in a long-lived server.
     with query_client(settings) as client:
         passages, search_diagnostics = search(settings, question, top_k=top_k, client=client)
 
-        floor_passed, floor_reason = passes_floor(
-            passages, search_diagnostics["term_overlap"], settings.min_term_overlap
-        )
+        floor_passed, floor_reason = passes_floor(passages, settings.min_results)
         diagnostics = {
             **search_diagnostics,
             "floor_passed": floor_passed,

@@ -11,7 +11,7 @@ services:
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       GLEAN_TOP_K: ${GLEAN_TOP_K:-5}
       GLEAN_MAX_SNIPPET_SIZE: ${GLEAN_MAX_SNIPPET_SIZE:-2000}
-      GLEAN_MIN_TERM_OVERLAP: ${GLEAN_MIN_TERM_OVERLAP:-0.30}
+      GLEAN_MIN_RESULTS: ${GLEAN_MIN_RESULTS:-1}
       GLEAN_CHAT_TIMEOUT_MS: ${GLEAN_CHAT_TIMEOUT_MS:-60000}
     ports:
       - "127.0.0.1:${MCP_PORT:-8000}:${MCP_PORT:-8000}"
@@ -23,41 +23,23 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # The write path. Same image as `mcp`, different command and a different token
+  # The write path: same image, different command, and the other token. Profiled,
+  # so `docker compose up` starts the server alone and this runs on demand:
+  #   docker compose run --rm indexer glean-index --dry-run
   indexer:
     build: .
     image: glean-chat-bot:latest
-    command: ["glean-indexd"]
+    profiles: ["index"]
+    command: ["glean-index"]
     environment:
       GLEAN_INSTANCE: ${GLEAN_INSTANCE:?}
       GLEAN_DATASOURCE: ${GLEAN_DATASOURCE:?}
       GLEAN_INDEXING_TOKEN: ${GLEAN_INDEXING_TOKEN:?}
       GLEAN_DOC_ID_PREFIX: ${GLEAN_DOC_ID_PREFIX:-halcyon}
+      GLEAN_MIN_BODY_CHARS: ${GLEAN_MIN_BODY_CHARS:-200}
       GLEAN_DOCS_ROOT: /app/data
-      INDEXER_PORT: ${INDEXER_PORT:-8001}
     volumes:
       - type: bind
         source: ${GLEAN_DOCS_ROOT:-./data}
         target: /app/data
         read_only: true
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:${INDEXER_PORT:-8001}/healthz')"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
-    restart: unless-stopped
-
-  # The schedule, and nothing else.
-  indexer-cron:
-    build:
-      context: .
-      target: cron
-    image: glean-chat-bot-cron:latest
-    depends_on:
-      indexer:
-        condition: service_healthy
-    environment:
-      INDEX_SCHEDULE: ${INDEX_SCHEDULE:-0 3 * * *}
-      INDEXER_URL: http://indexer:${INDEXER_PORT:-8001}/index
-    restart: unless-stopped
