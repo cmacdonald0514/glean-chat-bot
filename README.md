@@ -5,8 +5,6 @@ Indexing, Search and Chat APIs and exposed as a single MCP tool.
 
 ## How it works
 
-Two paths that share `models.py` and `utils/config.py` and touch nothing else.
-
 **Read — a question arrives**
 
 ```mermaid
