@@ -55,20 +55,12 @@ Optional, with defaults: `GLEAN_DOC_ID_PREFIX` (`halcyon`), `GLEAN_TOP_K` (`5`),
 `GLEAN_MIN_BODY_CHARS` (`200`),
 `GLEAN_CHAT_TIMEOUT_MS` (`60000`), `MCP_PORT` (`8000`), `MCP_ALLOWED_HOSTS`.
 
-The two tokens are separated structurally: `Settings.for_indexing()` reads
-`GLEAN_INDEXING_TOKEN`, `Settings.for_query()` reads `GLEAN_CLIENT_TOKEN` and
-never touches the indexing variable.
-
 ## Usage
 
 Three steps, once `.env` is filled in: index the corpus, start the server, point
 an MCP client at it. Only step 1 is repeated, whenever the corpus changes.
 
-Compose reads `.env` from the project root automatically, and the required
-variables fail fast — a missing one exits with `variable is not set` rather than
-starting a half-configured container.
-
-### 1. Index the corpus
+### 1. Indexing
 
 The indexer is a separate compose service (the write path) behind the `index`
 profile, so it never starts with the server. Run it on demand:
@@ -85,12 +77,14 @@ Re-running is idempotent: the bulk upload replaces the datasource contents as a
 unit. The corpus is bind-mounted read-only from `GLEAN_DOCS_ROOT`, so editing a
 document on the host and re-running picks it up with no rebuild.
 
+
 ### 2. Start the MCP server
 
 ```bash
 docker compose up --build          # foreground, logs to the terminal
 docker compose up -d --build       # background
 ```
+
 
 ### 3. Connect an MCP client
 
@@ -136,7 +130,8 @@ Restart the client after editing its config. Then ask it something the corpus
 covers — "how much PTO does a Level 6 employee get?" — and it should call
 `ask_company_docs` rather than answering from its own knowledge.
 
-### Demo Flow
+
+## Demo Flow
 
   1. "How many PTO days do I get?" → 18, cited to HR-004                                                                                                      
   2. "What corporate card do we use?" → Ramp, not Brex — then "What's the meal per diem for domestic travel?" → $75, not $50                                  
